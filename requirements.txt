@@ -4,3 +4,5 @@ scikit-learn
 lightgbm
 google-generativeai
 requests
+gradio_client
+
