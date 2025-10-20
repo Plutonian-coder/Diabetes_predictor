@@ -4,34 +4,32 @@ import numpy as np
 from sklearn.preprocessing import StandardScaler
 import google.generativeai as genai
 import os
-from gradio_client import Client # Import gradio_client
+import json # Import json for safe parsing
+from gradio_client import Client
 import re # For simple text parsing
 
 # --- API Key Configuration ---
-# It is highly recommended to store your API keys securely.
-# In Colab, you can use "Secrets" (the key icon on the left sidebar).
-# Add GEMINI_API_KEY to your Colab Secrets.
-# Alternatively, you can set it as an environment variable in your system.
-
-# Using the API key provided by the user directly for now.
-# For better security, consider using Colab Secrets.
-GEMINI_API_KEY = "AIzaSyB278rf_ZliONHPV-rc2wGE9k0INIGCiyE"
-
-# Check if API keys are loaded
-if not GEMINI_API_KEY:
-    st.error("GEMINI_API_KEY not found. Please set it in your Colab Secrets or environment variables.")
+# *** CRITICAL: Using st.secrets for secure API key handling. 
+# Make sure GEMINI_API_KEY is set in your Streamlit Cloud secrets. ***
+try:
+    GEMINI_API_KEY = "AIzaSyB278rf_ZliONHPV-rc2wGE9k0INIGCiyE"
+    genai.configure(api_key=GEMINI_API_KEY)
+except KeyError:
+    st.error("🔑 **GEMINI_API_KEY** not found in Streamlit Secrets. Please add it to your app settings for the Gemini AI to function.")
+    st.stop()
+except Exception as e:
+    st.error(f"Error configuring Gemini API: {e}")
     st.stop()
 
-# Configure Gemini API key for text generation
-genai.configure(api_key=GEMINI_API_KEY)
 
 # --- Gradio Client for Image Generation ---
+# *** MODIFIED: Initialized Client with "NihalGazi/FLUX-Unlimited" ***
 try:
-    # Initialize the Gradio Client for FLUX.1-dev Space
-    flux_client = Client("black-forest-labs/FLUX.1-dev")
-    st.success("Successfully connected to FLUX.1-dev image generation service.")
+    # Initialize the Gradio Client for the FLUX-Unlimited Space
+    image_gen_client = Client("NihalGazi/FLUX-Unlimited")
+    st.success("Successfully connected to NihalGazi/FLUX-Unlimited image generation service.")
 except Exception as e:
-    st.error(f"Failed to connect to FLUX.1-dev Gradio Space: {e}. Please ensure the Space is running and accessible.")
+    st.error(f"Failed to connect to NihalGazi/FLUX-Unlimited Gradio Space: {e}. Please ensure the Space is running and accessible.")
     st.stop()
 
 # Load the trained model and scaler
@@ -51,126 +49,109 @@ except FileNotFoundError:
 
 # Function to generate image prompt based on prediction
 def generate_image_prompt(prediction_text):
+    # Adjusting prompts for high-resolution generation
     if prediction_text == "not diabetic":
-        return "A vibrant and happy person enjoying a healthy lifestyle, perhaps jogging in a park or eating a balanced meal. Photorealistic, high quality, optimistic mood, bright colors."
+        return "A full-body shot of a vibrant, healthy person running in a sunny park with clear blue sky. Cinematic, highly detailed, photorealistic, 8k."
     else:
-        return "A person thoughtfully managing diabetes, perhaps engaging in light exercise, preparing a healthy meal, or consulting with a healthcare professional. Photorealistic, detailed, supportive and empowering mood, serene colors."
+        return "A thoughtful portrait of a person monitoring their health, holding an apple, in a serene, modern kitchen. Focus on warmth and determination. Photorealistic, detailed, empowering mood, 8k."
 
-# Function to generate image using FLUX.1-dev via Gradio Client
-@st.cache_data(show_spinner="Generating a relevant image...") # Cache image generation for performance
-def generate_flux_image(prompt):
+# *** MODIFIED: Updated parameters for NihalGazi/FLUX-Unlimited model ***
+def generate_image(prompt):
+    st.info("Generating a relevant image... Please wait. (Using FLUX-Unlimited)")
     try:
-        # Parameters as provided in your example
-        result = flux_client.predict(
+        # Parameters specific to the NihalGazi/FLUX-Unlimited client call
+        result = image_gen_client.predict(
             prompt=prompt,
+            width=1280,
+            height=1280,
             seed=0,
-            randomize_seed=True,
-            width=768,
-            height=768,
-            guidance_scale=3.5,
-            num_inference_steps=28,
-            api_name="/infer"
+            randomize=True,
+            server_choice="Google US Server",
+            api_name="/generate_image" # Specific API endpoint for this model
         )
 
+        # The FLUX-Unlimited model's output format is usually a file path string or a list containing one.
         if isinstance(result, (list, tuple)) and len(result) > 0:
             image_path = result[0]
         else:
             image_path = result
 
-        if image_path and os.path.exists(image_path):
+        if image_path:
             return image_path
         else:
-            st.error(f"FLUX.1-dev did not return a valid image path. Raw result: {result}")
+            st.error(f"Image generator did not return a valid path. Raw result: {result}")
             return None
     except Exception as e:
-        st.error(f"Error generating image with FLUX.1-dev: {e}")
+        st.error(f"Error generating image: {e}")
         return None
-
-# Function to extract metrics from text description (simple parsing, can be enhanced with advanced NLP)
-def extract_metrics_from_text(text_description):
-    metrics = {
-        "Pregnancies": 0, "Glucose": 100, "BloodPressure": 70, "SkinThickness": 20,
-        "Insulin": 80, "BMI": 25.0, "DiabetesPedigreeFunction": 0.5, "Age": 30
-    }
-    # Using regex to find numbers near keywords
-    # This is a basic example; a more robust solution would use a full NLP model
-    # to understand context and extract entities accurately.
-
-    pregnancies_match = re.search(r'(\d+)\s*(pregnancies|pregnant)', text_description, re.IGNORECASE)
-    if pregnancies_match: metrics["Pregnancies"] = int(pregnancies_match.group(1))
-
-    glucose_match = re.search(r'glucose\s+of\s+(\d+)|glucose\s+(\d+)', text_description, re.IGNORECASE)
-    if glucose_match: metrics["Glucose"] = int(glucose_match.group(1) or glucose_match.group(2))
-
-    bp_match = re.search(r'blood\s*pressure\s+of\s+(\d+)|blood\s*pressure\s+(\d+)', text_description, re.IGNORECASE)
-    if bp_match: metrics["BloodPressure"] = int(bp_match.group(1) or bp_match.group(2))
-
-    skin_match = re.search(r'skin\s*thickness\s+of\s+(\d+)|skin\s*thickness\s+(\d+)', text_description, re.IGNORECASE)
-    if skin_match: metrics["SkinThickness"] = int(skin_match.group(1) or skin_match.group(2))
-
-    insulin_match = re.search(r'insulin\s+level\s+of\s+(\d+)|insulin\s+(\d+)', text_description, re.IGNORECASE)
-    if insulin_match: metrics["Insulin"] = int(insulin_match.group(1) or insulin_match.group(2))
-
-    bmi_match = re.search(r'bmi\s+of\s+([\d.]+)|bmi\s+([\d.]+)', text_description, re.IGNORECASE)
-    if bmi_match: metrics["BMI"] = float(bmi_match.group(1) or bmi_match.group(2))
-
-    dpf_match = re.search(r'(diabetes\s+pedigree\s+function|dpf)\s+of\s+([\d.]+)|(diabetes\s+pedigree\s+function|dpf)\s+([\d.]+)', text_description, re.IGNORECASE)
-    if dpf_match: metrics["DiabetesPedigreeFunction"] = float(dpf_match.group(2) or dpf_match.group(4))
-
-    age_match = re.search(r'age\s+of\s+(\d+)|age\s+(\d+)', text_description, re.IGNORECASE)
-    if age_match: metrics["Age"] = int(age_match.group(1) or age_match.group(2))
-
-    return metrics
 
 # Centralized prediction and result display function
 def perform_prediction_and_display(pregnancies, glucose, blood_pressure, skin_thickness, insulin, bmi, dpf, age):
-    input_data = (pregnancies, glucose, blood_pressure, skin_thickness, insulin, bmi, dpf, age)
-    input_np = np.asarray(input_data)
-    input_data_reshaped = input_np.reshape(1, -1)
+    try:
+        input_data = (pregnancies, glucose, blood_pressure, skin_thickness, insulin, bmi, dpf, age)
+        input_np = np.asarray(input_data)
+        input_data_reshaped = input_np.reshape(1, -1)
 
-    if input_data_reshaped.shape[1] != scaler.n_features_in_:
-         st.error(f"Input data has {input_data_reshaped.shape[1]} features, but the scaler was fitted with {scaler.n_features_in_} features.")
-         return
+        if input_data_reshaped.shape[1] != scaler.n_features_in_:
+            st.error(f"Input data has {input_data_reshaped.shape[1]} features, but the scaler was fitted with {scaler.n_features_in_} features.")
+            return
 
-    std_data = scaler.transform(input_data_reshaped)
-    prediction = lgbm_classifier.predict(std_data)
+        std_data = scaler.transform(input_data_reshaped)
+        prediction = lgbm_classifier.predict(std_data)
 
-    st.subheader('Prediction Result:')
-    if prediction[0] == 0:
-        st.balloons()
-        st.success('🎉 Great news! Based on the provided metrics, the model predicts that the person is **NOT** diabetic.')
-        prediction_text = "not diabetic"
-    else:
-        st.warning('⚠️ Based on the provided metrics, the model predicts that the person **IS** diabetic. Please consult a healthcare professional for diagnosis.')
-        prediction_text = "diabetic"
-
-    st.markdown("---")
-    st.header('Additional Information')
-
-    col_exp, col_img = st.columns(2)
-
-    with col_exp:
-        st.subheader('Explanation (powered by Gemini):')
-        try:
-            # Using 'gemini-pro' for text generation.
-            model = genai.GenerativeModel('gemini-2.0-flash')
-            prompt = f"Explain the following diabetes prediction in simple terms for a user. The input features were: Pregnancies={pregnancies}, Glucose={glucose}, BloodPressure={blood_pressure}, SkinThickness={skin_thickness}, Insulin={insulin}, BMI={bmi}, DiabetesPedigreeFunction={dpf}, Age={age}. The prediction is that the person is {prediction_text}. Briefly mention which of these factors might have contributed to the prediction."
-            response = model.generate_content(prompt)
-            explanation = response.text
-            st.write(explanation)
-        except Exception as e:
-            st.error(f"Failed to generate explanation using Gemini ('gemini-pro'). Error: {e}. "
-                     "Please ensure your API key is correct and 'gemini-pro' is available in your region.")
-
-    with col_img:
-        st.subheader('Related Image (FLUX.1-dev AI):')
-        image_prompt = generate_image_prompt(prediction_text)
-        image_path = generate_flux_image(image_prompt)
-
-        if image_path:
-            st.image(image_path, caption=image_prompt, use_column_width=True)
+        st.subheader('Prediction Result:')
+        if prediction[0] == 0:
+            st.balloons()
+            st.success('🎉 Great news! Based on the provided metrics, the model predicts that the person is **NOT** diabetic.')
+            prediction_text = "not diabetic"
         else:
-            st.warning("Could not generate a relevant image at this time using FLUX.1-dev.")
+            st.warning('⚠️ Based on the provided metrics, the model predicts that the person **IS** diabetic. Please consult a healthcare professional for diagnosis.')
+            prediction_text = "diabetic"
+
+        st.markdown("---")
+        st.header('Additional Information')
+
+        col_exp, col_img = st.columns(2)
+
+        with col_exp:
+            st.subheader('Explanation (powered by Gemini):')
+            try:
+                # Enhanced medical persona prompt
+                model = genai.GenerativeModel('gemini-2.0-flash')
+                prompt = f"""
+                You are a compassionate medical AI assistant.
+                A patient has just received a prediction from a machine learning model. Your role is to explain this result in a professional, empathetic, and easy-to-understand manner.
+                IMPORTANT:
+                1.  Do NOT give medical advice. Always end your explanation by advising the user to consult a healthcare professional.
+                2.  Base your explanation *only* on the provided data.
+                3.  Briefly mention which of the input factors might be contributing.
+                Patient Data:
+                -   Pregnancies: {pregnancies}, Glucose: {glucose}, Blood Pressure: {blood_pressure},
+                -   Skin Thickness: {skin_thickness}, Insulin: {insulin}, BMI: {bmi},
+                -   Diabetes Pedigree Function: {dpf}, Age: {age}
+                Model Prediction: The person is **{prediction_text}**.
+                Please provide your explanation now.
+                """
+                
+                response = model.generate_content(prompt)
+                explanation = response.text
+                st.write(explanation)
+            except Exception as e:
+                st.error(f"Failed to generate explanation using Gemini. Error: {e}.")
+
+        with col_img:
+            st.subheader('Related Image (AI Generated):')
+            image_prompt = generate_image_prompt(prediction_text)
+            image_path = generate_image(image_prompt) # Using the new function
+
+            if image_path:
+                st.image(image_path, caption=image_prompt, use_column_width=True)
+            else:
+                st.warning("Could not generate a relevant image at this time.")
+                
+    except Exception as e:
+        st.error(f"An error occurred during prediction: {e}")
+        st.warning("The ML model could not run. Please check the inputs or contact support.")
 
 
 # --- Streamlit UI Design ---
@@ -182,13 +163,13 @@ Welcome to your personal health companion. You can either use our **AI Assistant
 """)
 
 # Create tabs for different modes
-tab1, tab2 = st.tabs(["🤖 AI Assistant", "✍️ Manual Health Metrics Input"])
+tab1, tab2 = st.tabs(["🤖 AI Assistant (Beta)", "✍️ Manual Health Metrics Input"])
 
 with tab1:
     st.header("Tell Me About Your Health...")
     st.markdown("""
     Describe your current health status, any symptoms, or provide any known health metrics in a natural language.
-    Our AI will try to understand and provide insights.
+    Our AI will provide a general assessment and then try to run a prediction if enough data is found.
     """)
     user_description = st.text_area(
         "Describe your health here:",
@@ -198,45 +179,72 @@ with tab1:
 
     if st.button('Get AI Insights', key='ai_predict_button'):
         st.info("Processing your description with Gemini AI...")
+        
+        # --- Gemini as a "Fallback" Medical Practitioner ---
+        try:
+            gemini_model = genai.GenerativeModel('gemini-2.0-flash')
+            prompt_for_assessment = f"""
+            You are a medical assistant AI. A user has provided the following health description.
+            Please provide a brief, general assessment based *only* on their text.
+            - If they mention concerning symptoms (like high glucose, high BMI), gently acknowledge them.
+            - **Do NOT diagnose them.**
+            - **Always** recommend they speak to a healthcare professional for proper advice.
+            - Keep it to one short paragraph.
+            User description: "{user_description}"
+            """
+            response_assessment = gemini_model.generate_content(prompt_for_assessment)
+            st.subheader("Gemini's General Assessment:")
+            st.write(response_assessment.text)
+            st.markdown("---")
+
+        except Exception as e:
+            st.warning(f"Could not get general assessment from Gemini: {e}")
+
+        
+        # --- Second, try to extract metrics for the ML model ---
         try:
             # Use Gemini to extract or confirm metrics
-            gemini_model = genai.GenerativeModel('gemini-2.0-flash') # Using gemini-pro for parsing
             prompt_for_parsing = f"""
             The user provided the following health description: "{user_description}"
-            Please extract the following metrics if mentioned, otherwise suggest typical values or state if not found.
-            Format your response as a JSON string with keys: Pregnancies, Glucose, BloodPressure, SkinThickness, Insulin, BMI, DiabetesPedigreeFunction, Age.
-            If a value is not explicitly mentioned, use a reasonable default. For DiabetesPedigreeFunction, if not mentioned, use 0.5.
-            Example: {{"Pregnancies": 1, "Glucose": 120, "BloodPressure": 70, "SkinThickness": 20, "Insulin": 80, "BMI": 25.0, "DiabetesPedigreeFunction": 0.5, "Age": 30}}
+            Please extract the following metrics.
+            Format your response as a single, clean JSON string with keys: "Pregnancies", "Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI", "DiabetesPedigreeFunction", "Age".
+            
+            - If a value is not explicitly mentioned, use a typical default (e.g., SkinThickness: 20, Insulin: 80, DiabetesPedigreeFunction: 0.5).
+            - For Pregnancies, if not mentioned, assume 0.
+            - For Age, if not mentioned, assume 30.
+            
+            Example response: {{"Pregnancies": 1, "Glucose": 120, "BloodPressure": 70, "SkinThickness": 20, "Insulin": 80, "BMI": 25.0, "DiabetesPedigreeFunction": 0.5, "Age": 30}}
+            
+            Respond ONLY with the JSON string.
             """
-            response = gemini_model.generate_content(prompt_for_parsing)
-            extracted_metrics_str = response.text.strip()
+            response_parsing = gemini_model.generate_content(prompt_for_parsing)
+            extracted_metrics_str = response_parsing.text.strip()
 
-            # Clean up potential markdown formatting if Gemini adds it
+            # Clean up potential markdown formatting
             if extracted_metrics_str.startswith("```json") and extracted_metrics_str.endswith("```"):
                 extracted_metrics_str = extracted_metrics_str[7:-3].strip()
 
-            st.write("---")
-            st.subheader("AI's Interpretation of Your Metrics:")
+            st.subheader("AI's Interpretation of Your Metrics (for Model Prediction):")
             try:
-                extracted_metrics = eval(extracted_metrics_str) # Using eval for quick parsing of JSON-like string
-                                                                # For production, consider `json.loads` after careful sanitization
-                st.json(extracted_metrics) # Display the extracted metrics
+                # Use json.loads() for safety
+                extracted_metrics = json.loads(extracted_metrics_str) 
+                st.json(extracted_metrics) 
 
                 # Perform prediction with extracted metrics
                 st.subheader("Running Diabetes Prediction based on AI-Parsed Data...")
                 perform_prediction_and_display(
-                    extracted_metrics.get("Pregnancies"),
-                    extracted_metrics.get("Glucose"),
-                    extracted_metrics.get("BloodPressure"),
-                    extracted_metrics.get("SkinThickness"),
-                    extracted_metrics.get("Insulin"),
-                    extracted_metrics.get("BMI"),
-                    extracted_metrics.get("DiabetesPedigreeFunction"),
-                    extracted_metrics.get("Age")
+                    extracted_metrics.get("Pregnancies", 0),
+                    extracted_metrics.get("Glucose", 100),
+                    extracted_metrics.get("BloodPressure", 70),
+                    extracted_metrics.get("SkinThickness", 20),
+                    extracted_metrics.get("Insulin", 80),
+                    extracted_metrics.get("BMI", 25.0),
+                    extracted_metrics.get("DiabetesPedigreeFunction", 0.5),
+                    extracted_metrics.get("Age", 30)
                 )
             except Exception as json_e:
                 st.error(f"AI had difficulty parsing the metrics into a usable format: {json_e}")
-                st.warning("Please try rephrasing your description or use the manual input tab.")
+                st.warning("The ML model could not be run. Please review the General Assessment above or use the manual input tab.")
                 st.code(extracted_metrics_str) # Show raw AI output for debugging
         except Exception as e:
             st.error(f"Error communicating with Gemini AI for insights: {e}")
